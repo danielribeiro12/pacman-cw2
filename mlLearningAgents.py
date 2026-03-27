@@ -164,12 +164,12 @@ class QLearnAgent(Agent):
         """Get count for state-action pair"""
         return self.counts.get((state, action), 0)
 
-    def explorationFn(self, qValue: float, count: int) -> float:
+    def explorationFn(self, utility: float, counts: int) -> float:
         """
         Compute exploration value to balance exploitation and exploration
         Higher for actions that haven't been tried much
         """
-        return qValue + 1.0 / (count + 1.0)
+        return utility + 1.0 / (counts + 1.0)
 
     def getAction(self, state: GameState) -> Directions:
         """
