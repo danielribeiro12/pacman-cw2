@@ -228,7 +228,7 @@ class QLearnAgent(Agent):
     # DO NOT change the function signature
     def getCount(self,
                  state: GameStateFeatures,
-                 action: Directions):
+                 action: Directions) -> int:
         """
         Returns the number of times (state, action) has been visited.
         Returns 0 for unseen pairs.
