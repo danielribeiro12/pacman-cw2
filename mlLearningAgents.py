@@ -43,28 +43,16 @@ class GameStateFeatures:
 
     def __init__(self, state: GameState):
         """
-        Extracts the relevant features from a game state and stores them in
-        a hashable form so that GameStateFeatures can be used as a dict key.
-
-        Features captured:
-          - Pacman's position
-          - All ghost positions (as a sorted tuple for canonical ordering)
-          - The food grid (as a tuple of tuples of bools)
-          - The set of legal non-STOP actions (stored for maxQValue use)
-
         Args:
             state: A given game state object
         """
         self.pacmanPos = state.getPacmanPosition()
-
-        # Sort ghost positions so state is canonical regardless of ghost ordering
         self.ghostPos = tuple(sorted(state.getGhostPositions()))
 
-        # Convert the food grid to a hashable nested tuple
         food = state.getFood()
         self.food = tuple(tuple(row) for row in food)
 
-        # Store legal actions (excluding STOP) so maxQValue can enumerate them
+        # store legal actions here so maxQValue doesn't need the full GameState
         legal = state.getLegalPacmanActions()
         if Directions.STOP in legal:
             legal.remove(Directions.STOP)
@@ -79,9 +67,6 @@ class GameStateFeatures:
         return (self.pacmanPos == other.pacmanPos and
                 self.ghostPos == other.ghostPos and
                 self.food == other.food)
-
-    def __repr__(self):
-        return f"GSF(pac={self.pacmanPos}, ghosts={self.ghostPos})"
 
 
 class QLearnAgent(Agent):
@@ -115,17 +100,15 @@ class QLearnAgent(Agent):
         # Count the number of games we have played
         self.episodesSoFar = 0
 
-        # Q-value table: maps (GameStateFeatures, action) -> float
-        # Unseen pairs default to 0.0
+        # Q-table: (state, action) -> float, defaults to 0.0 for unseen pairs
         self.qValues = {}
 
-        # Visitation counts: maps (GameStateFeatures, action) -> int
-        # Used by explorationFn to encourage trying under-visited actions
+        # visit counts per (state, action), used by explorationFn
         self.counts = {}
 
-        # Previous-step bookkeeping for computing rewards and performing updates
-        self.prevState = None   # GameState from the previous step
-        self.prevAction = None  # action taken at the previous step
+        # store last state/action so we can compute the reward on the next step
+        self.prevState = None
+        self.prevAction = None
 
     # Accessor functions for the variable episodesSoFar controlling learning
     def incrementEpisodesSoFar(self):
@@ -159,10 +142,6 @@ class QLearnAgent(Agent):
     def computeReward(startState: GameState,
                       endState: GameState) -> float:
         """
-        The reward for a transition is simply the change in game score.
-        The game score increases when Pacman eats food/ghosts and decreases
-        each time step (to encourage efficiency) or on death.
-
         Args:
             startState: A starting state
             endState: A resulting state
@@ -178,9 +157,6 @@ class QLearnAgent(Agent):
                   state: GameStateFeatures,
                   action: Directions) -> float:
         """
-        Returns the Q-value for (state, action). Unseen pairs return 0.0,
-        which acts as an optimistic initialisation when rewards are negative.
-
         Args:
             state: A given state
             action: Proposed action to take
@@ -194,9 +170,6 @@ class QLearnAgent(Agent):
     # DO NOT change the function signature
     def maxQValue(self, state: GameStateFeatures) -> float:
         """
-        Returns the maximum Q-value over all legal (non-STOP) actions in the
-        given state. Returns 0.0 for terminal states (no legal actions).
-
         Args:
             state: The given state
 
@@ -216,27 +189,23 @@ class QLearnAgent(Agent):
               reward: float,
               nextState: GameStateFeatures):
         """
-        Performs a one-step Q-learning update:
-
-            Q(s, a) <- Q(s, a) + alpha * (reward + gamma * max_a' Q(s', a') - Q(s, a))
-
-        When nextState is None (terminal transition) max_a' Q(s', a') is treated as 0.
+        Performs a Q-learning update
 
         Args:
             state: the initial state
             action: the action that was took
-            nextState: the resulting state (None if terminal)
+            nextState: the resulting state
             reward: the reward received on this trajectory
         """
         current_q = self.getQValue(state, action)
 
-        # For terminal transitions there is no future reward
+        # terminal state has no future value
         max_next_q = 0.0 if nextState is None else self.maxQValue(nextState)
 
-        # TD target: immediate reward + discounted future value
+        # TD target: r + gamma * max Q(s')
         td_target = reward + self.gamma * max_next_q
 
-        # Update rule: move Q-value towards the TD target
+        # nudge Q(s,a) towards the TD target by alpha
         new_q = current_q + self.alpha * (td_target - current_q)
         self.qValues[(state, action)] = new_q
 
@@ -246,7 +215,7 @@ class QLearnAgent(Agent):
                     state: GameStateFeatures,
                     action: Directions):
         """
-        Increments the visitation count for (state, action).
+        Updates the stored visitation counts.
 
         Args:
             state: Starting state
@@ -259,7 +228,7 @@ class QLearnAgent(Agent):
     # DO NOT change the function signature
     def getCount(self,
                  state: GameStateFeatures,
-                 action: Directions) -> int:
+                 action: Directions):
         """
         Returns the number of times (state, action) has been visited.
         Returns 0 for unseen pairs.
@@ -279,12 +248,10 @@ class QLearnAgent(Agent):
                       utility: float,
                       counts: int) -> float:
         """
-        Optimistic exploration bonus: if a (state, action) pair has been
-        visited fewer than maxAttempts times we return +infinity so that
-        action is always preferred over already-explored alternatives.
-        Once it has been tried enough, we fall back to the plain Q-value.
+        Computes exploration function.
+        Return a value based on the counts
 
-        This is a "least-pick" strategy: always try under-explored actions first.
+        HINT: Do a greed-pick or a least-pick
 
         Args:
             utility: expected utility for taking some action a in some given state s
@@ -294,7 +261,8 @@ class QLearnAgent(Agent):
             The exploration value
         """
         if counts < self.maxAttempts:
-            # Not yet tried enough: force exploration of this action
+            # least-pick: always prefer the least-visited action until it has been
+            # tried maxAttempts times, then fall back to the Q-value
             return float('inf')
         return utility
 
@@ -302,17 +270,11 @@ class QLearnAgent(Agent):
     # DO NOT change the function signature
     def getAction(self, state: GameState) -> Directions:
         """
-        Selects an action combining epsilon-greedy exploration with the
-        exploration function:
-          - With probability epsilon: pick a uniformly random legal action.
-          - With probability 1 - epsilon: pick the action that maximises
-            explorationFn(Q(s, a), count(s, a)), breaking ties randomly.
-            explorationFn prioritises under-visited actions (count < maxAttempts)
-            over purely greedy Q-value selection, ensuring every action is tried
-            a sufficient number of times before the agent commits to a policy.
+        Choose an action to take to maximise reward while
+        balancing gathering data for learning
 
-        Before choosing, performs a Q-learning update using the previous
-        (state, action, reward) transition if one exists.
+        If you wish to use epsilon-greedy exploration, implement it in this method.
+        HINT: look at pacman_utils.util.flipCoin
 
         Args:
             state: the current state
@@ -320,38 +282,38 @@ class QLearnAgent(Agent):
         Returns:
             The action to take
         """
-        # Legal actions for Pacman, excluding STOP
+        # remove STOP, never want pacman to stand still
         legal = state.getLegalPacmanActions()
         if Directions.STOP in legal:
             legal.remove(Directions.STOP)
 
         stateFeatures = GameStateFeatures(state)
 
-        # Q-learning update: if we have a previous transition, compute the reward
-        # (score difference) and update Q(prevState, prevAction)
+        # run the Q-update for the previous (s, a, r, s') transition
         if self.prevState is not None:
             reward = self.computeReward(self.prevState, state)
             prevFeatures = GameStateFeatures(self.prevState)
             self.learn(prevFeatures, self.prevAction, reward, stateFeatures)
 
-        # Epsilon-greedy action selection
-        # During training epsilon > 0 ensures some random exploration.
-        # During testing epsilon = 0 so we always act via explorationFn.
+        # epsilon-greedy: explore randomly with prob epsilon,
+        # otherwise pick the action with the best explorationFn score
         if util.flipCoin(self.epsilon):
-            # Exploration: random action
             action = random.choice(legal)
         else:
-            # Use explorationFn to score each action: under-visited actions
-            # receive +inf, fully-visited actions are scored by their Q-value.
-            # Pick the action with the highest exploration score; break ties randomly.
-            scores = [self.explorationFn(self.getQValue(stateFeatures, a),
-                                         self.getCount(stateFeatures, a))
-                      for a in legal]
+            if self.alpha > 0:
+                # training: explorationFn returns inf for under-visited actions
+                # so they're always tried first; falls back to Q-value once explored
+                scores = [self.explorationFn(self.getQValue(stateFeatures, a),
+                                             self.getCount(stateFeatures, a))
+                          for a in legal]
+            else:
+                # testing: ignore exploration bonus, act purely on learned Q-values
+                scores = [self.getQValue(stateFeatures, a) for a in legal]
             best_score = max(scores)
             best_actions = [a for a, s in zip(legal, scores) if s == best_score]
             action = random.choice(best_actions)
 
-        # Record visit and store transition info for the next step
+        # update count and save for next step's Q-update
         self.updateCount(stateFeatures, action)
         self.prevState = state
         self.prevAction = action
@@ -360,25 +322,21 @@ class QLearnAgent(Agent):
 
     def final(self, state: GameState):
         """
-        Called by the game engine at the end of every episode (win or loss).
-
-        Performs the final Q-learning update for the terminal transition
-        (where the next-state value is 0 by definition), then resets
-        the episode bookkeeping.
+        Handle the end of episodes.
+        This is called by the game after a win or a loss.
 
         Args:
             state: the final game state
         """
         print(f"Game {self.getEpisodesSoFar()} just ended!")
 
-        # Terminal Q-learning update: no future reward from a terminal state
+        # final Q-update for the terminal transition — no next state so max Q(s') = 0
         if self.prevState is not None:
             reward = self.computeReward(self.prevState, state)
             prevFeatures = GameStateFeatures(self.prevState)
-            # nextState=None signals that max Q(s', .) = 0
             self.learn(prevFeatures, self.prevAction, reward, None)
 
-        # Reset episode bookkeeping ready for the next episode
+        # reset for next episode
         self.prevState = None
         self.prevAction = None
 
